@@ -2,21 +2,22 @@
 
 Controlador **Regulated Pure Pursuit (RPP)** para el F1TENTH del simulador
 AutoDRIVE, en ROS 2 Humble. Lee la trayectoria global suavizada de la
-Parte 1, la sigue en pista y cuenta y cronometra cada vuelta en la terminal.
+Parte 1 del proyecto, la sigue en pista. Incluye un contador y cronómetro
+para medir el tiempo de cada vuelta en la terminal.
 
 Segunda parte del proyecto final de Vehiculos no Tripulados. La primera parte
-(mapeado con SLAM Toolbox, planificacion con LPA\* y suavizado) vive en
+(mapeado con SLAM Toolbox, planificación con LPA\* y suavizado) en
 [AutoDRIVE-F110-Global-Planner](https://github.com/Raulvillaes/AutoDRIVE-F110-Global-Planner).
 
-> **Video de evidencia:** PENDIENTE (enlace de YouTube).
+> **Video en Youtube del controlador en funcionamiento:** [Regulated Pure Pursuit Controller in AutoDRIVE simulator (F1TENTH)](https://youtu.be/nKb0E7PGJLo).
 
 ## Indice
 
 - [Resultado](#resultado)
 - [Prerrequisitos](#prerrequisitos)
-- [Instalacion](#instalacion)
-- [Ejecucion](#ejecucion)
-- [La trayectoria de entrada](#la-trayectoria-de-entrada)
+- [Instalación](#instalación)
+- [Ejecución](#ejecución)
+- [Trayectoria de entrada](#trayectoria-de-entrada)
 - [Marcos de coordenadas: por que no hace falta localizacion](#marcos-de-coordenadas-por-que-no-hace-falta-localizacion)
 - [El controlador](#el-controlador)
 - [Contador de vueltas y cronometro](#contador-de-vueltas-y-cronometro)
@@ -28,34 +29,34 @@ Segunda parte del proyecto final de Vehiculos no Tripulados. La primera parte
 
 ## Resultado
 
-Diez vueltas consecutivas sin tocar el muro a 2.7 m/s de crucero, con el
-perfil de velocidad frenando a 1.1 m/s en la curva de 1 m de radio (la
-vuelta 1 incluye la salida desde parado):
+Diez vueltas consecutivas sin colisiones. Velocidad de crucero: a 2.7 m/s
+de crucero, con el perfil de velocidad frenando a 1.1 m/s en la curva
+de 1 m de radio (La primera vuelta se cuenta desde el frenado completado):
 
-| Vuelta | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
-|---|---|---|---|---|---|---|---|---|---|---|
+|   Vuelta   |   1   |   2   |   3   |   4   |   5   |   6   |   7   |   8   |   9   |   10  |
+|    ---     |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |
 | Tiempo (s) | 14.14 | 13.83 | 13.78 | 13.76 | 13.70 | 13.70 | 13.69 | 13.73 | 13.79 | 13.71 |
 
 Vuelta de 27.85 m, velocidad media 1.96 m/s. Error lateral respecto a la
 trayectoria de 12 cm (rms) y 26 cm maximo; holgura minima al muro vista
-por el LiDAR de 1.02 m, y la regulacion por proximidad no llego a actuar.
-El lazo corre a la cadencia del puente en esa maquina, unos 10 Hz, con un
+por el LiDAR de 1.02 m, y la regulacion por proximidad no llegó a actuar.
+El lazo corre a la cadencia del puente en esa máquina, unos 10 Hz, con un
 retardo mando -> efecto de 0.3 s compensado.
 
 ## Prerrequisitos
 
-- Ubuntu 22.04 y **ROS 2 Humble**.
-- **Simulador AutoDRIVE** y su puente de ROS 2 (`autodrive_f1tenth`) ya
-  compilados en `~/autodrive_ws`, siguiendo el
-  [Tutorial 1](https://github.com/nabihandres/AUTODRIVE/blob/main/Tutorial%201%3A%20AutoDrive%20Installation%20and%20Setup.md)
-  del curso. El puente necesita su propio entorno virtual en
-  `~/autodrive_ws/venv`; este paquete solo anade `numpy`, que ya esta ahi.
-- No hace falta el repositorio de la Parte 1: la trayectoria viaja dentro
-  de este paquete (ver [La trayectoria de entrada](#la-trayectoria-de-entrada)).
+- [Ubuntu 22.04.5 LTS (Jammy)](https://releases.ubuntu.com/jammy/) y
+  [ROS 2 Humble](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html).
+- **Simulador AutoDRIVE** y su bridge de ROS 2 ya compilados en `~/autodrive_ws`,
+  siguiendo el [Tutorial 1](https://github.com/nabihandres/AUTODRIVE/blob/main/Tutorial%201%3A%20AutoDrive%20Installation%20and%20Setup.md)
+- La generación de ruta por planificación global se presenta en la
+  [Parte 1](https://github.com/Raulvillaes/AutoDRIVE-F110-Global-Planner), pero ya hay
+  una trayectoria cargada en este repositorio
+  (ver [Trayectoria de entrada](#trayectoria-de-entrada)).
 
-## Instalacion
+## Instalación
 
-El repositorio es directamente un paquete `ament_python`. Se clona dentro
+El repositorio es un paquete `ament_python`. Se clona dentro
 de `src` del workspace del simulador y se compila con colcon:
 
 ```bash
@@ -71,17 +72,16 @@ colcon build --packages-select rpp_f110 --symlink-install
 `--symlink-install` es opcional: permite editar `config/params.yaml` sin
 recompilar.
 
-## Ejecucion
+## Ejecución
 
-Hacen falta el simulador y dos terminales. **Todo se sourcea bajo `bash`**:
-`/opt/ros/humble/setup.bash` no resuelve su propia ruta en `zsh` y falla
-con `no such file or directory: .../setup.sh`.
+Para correr el controlador hacen falta el simulador y dos terminales bash:
 
-**1. Simulador.** Abrir `AutoDRIVE Simulator`, pulsar *Connect* y poner el
-modo de conduccion en **Autonomous**. El simulador arranca en *Manual* y en
-ese modo **descarta en silencio** los comandos de ROS: el coche no se mueve
-y la realimentacion de direccion se queda en 0.0. No hay topic para
-cambiarlo; se hace en la interfaz.
+**1. Abrir el simulador** `AutoDRIVE Simulator` desde el explorador o, si se
+ha seguido el tutorial del curso, puede abrirse con:
+
+```bash
+~/Downloads/AutoDRIVE_Sim/AutoDRIVE\ Simulator.x86_64
+```
 
 **2. Puente** (terminal 1):
 
@@ -94,9 +94,7 @@ export PYTHONUNBUFFERED=1
 ros2 launch autodrive_f1tenth simulator_bringup_headless.launch.py
 ```
 
-Con `simulator_bringup_rviz.launch.py` se abre ademas RViz. Si se reinicia
-el simulador hay que relanzar el puente: los topics siguen anunciados pero
-no fluye ningun dato.
+Con `simulator_bringup_rviz.launch.py` se abre ademas RViz.
 
 **3. Controlador** (terminal 2):
 
@@ -110,13 +108,12 @@ ros2 launch rpp_f110 rpp.launch.py
 
 Arrancan tres nodos: `rpp_node` (control), `lap_node` (vueltas y
 cronometro, imprime en esta terminal) y `path_node` (visualizacion). Para
-verlo en RViz se anaden `/rpp/path` (Path), `/rpp/lookahead` (Marker) y
+verlo en RViz se añaden `/rpp/path` (Path), `/rpp/lookahead` (Marker) y
 `/rpp/finish_line` (Marker) con el marco fijo en `map`.
 
-Con `total_laps` mayor que cero en `config/params.yaml` (10 por defecto),
-al completar esas vueltas `lap_node` imprime el resumen y el launch apaga
-todo; el controlador deja el acelerador a cero antes de salir. Con Ctrl+C
-pasa lo mismo.
+Al completar `total_laps` (defindas en `config/params.yaml`), si es un
+valor mayor a 0 (10 por defecto), `lap_node` imprime el resumen y el
+launch apaga todo; el controlador deja el acelerador a cero antes de salir.
 
 Argumentos del launch:
 
@@ -125,33 +122,27 @@ ros2 launch rpp_f110 rpp.launch.py params_file:=/ruta/a/otro.yaml   # otros para
 ros2 launch rpp_f110 rpp.launch.py log_csv:=/tmp/rpp.csv             # registro por ciclo
 ```
 
-**Reset del simulador.** El boton *Reset* devuelve el coche a la salida
-pero corta la conexion con el puente y deja el modo en *Manual*: hay que
-pulsar *Connect* y *Autonomous* otra vez. No hace falta relanzar nada de
-este paquete: el contador detecta el salto de pose, se pone a cero y
-espera a que el coche se mueva.
-
 **Carga de la maquina.** El lazo de control corre a la cadencia del
-simulador (unos 5 Hz). Si el simulador pierde cuadros porque la maquina
-esta ocupada con otras cosas, el puente publica mas lento, el retardo entre
-mando y efecto crece y el coche subvira en las curvas cerradas. Para las
-vueltas de evidencia conviene no tener nada mas abierto y usar el puente
-*headless* si RViz no hace falta.
+simulador (unos 5 Hz). Si el simulador pierde cuadros porque la máquina
+está cargada o tiene insuficientes recursos, el puente publica más lento,
+el retardo entre mando y efecto crece y el coche subvira en las curvas
+cerradas. Es convniente no tener nada más abierto y usar el puente
+*headless* si RViz no hace falta o en máquinas de bajos recursos.
 
-## La trayectoria de entrada
+## Trayectoria de entrada
 
 El controlador se alimenta de un CSV con la vuelta completa en el marco
 `map`:
 
-| Columna | Unidad | Significado                                     |
-|---------|--------|-------------------------------------------------|
-| `x`     | m      | posicion en el marco `map`                      |
-| `y`     | m      | posicion en el marco `map`                      |
+| Columna | Unidad | Significado                                      |
+|---------|--------|--------------------------------------------------|
+| `x`     | m      | posicion en el marco `map`                       |
+| `y`     | m      | posicion en el marco `map`                       |
 | `s`     | m      | longitud de arco acumulada desde el primer punto |
-| `kappa` | 1/m    | curvatura con signo, positiva a izquierdas      |
+| `kappa` | 1/m    | curvatura con signo, positiva a izquierdas       |
 
-La lista es **ciclica**: el ultimo punto no repite al primero, empalma con
-el. El controlador la recorre en circulo y el seguimiento no se interrumpe
+La lista es **cíclica**: el ultimo punto no repite al primero, empalma con
+el. El controlador la recorre en círculo y el seguimiento no se interrumpe
 al cerrar la vuelta.
 
 **Ya hay un archivo listo:** `config/trajectory.csv` es una copia de la
@@ -173,31 +164,23 @@ y se apunta a ella con el parametro `trajectory_csv` de `rpp_node` y
 
 ## Marcos de coordenadas: por que no hace falta localizacion
 
-El puente de AutoDRIVE publica la transformacion `map -> f1tenth_1` a
-partir del IPS y la IMU del simulador, es decir, la pose verdadera del
-coche, con el marco del vehiculo en el centro del eje trasero. Ese `map` es
-el mismo sistema de coordenadas del mapa de SLAM Toolbox sobre el que se
-planifico la trayectoria: en la Parte 1 se comprobo proyectando la pose del
-TF sobre el PGM (`tools/check_frame.py pose` en aquel repositorio), y cae
-centrada en el carril.
+El puente de AutoDRIVE publica la pose verdadera del coche (el centro
+del eje trasero) desde la transformación `map -> f1tenth_1` a partir
+del IPS y la IMU del simulador. Ese `map` es el mismo sistema de
+coordenadas del mapa generado con SLAM Toolbox sobre el que se planificó
+la trayectoria en la Parte 1 y cae centrada en el carril (se comprobó
+con `tools/check_frame.py pose` en aquel repositorio).
 
-Consecuencia: **los waypoints se consumen tal cual** y la pose se lee del
-TF. No hay AMCL, ni filtro de particulas, ni cambio de marco.
+Por eso **los waypoints se consumen tal cual**. No hace falta AMCL,
+ni filtro de particulas, ni cambio de marco.
 
-Los nodos leen la pose de dos topics del puente, `/autodrive/f1tenth_1/ips`
-(posicion) y `/autodrive/f1tenth_1/imu` (orientacion), y no del TF. Son los
-mismos numeros que el puente mete en `map -> f1tenth_1`, pero el puente crea
-un `TransformBroadcaster` **nuevo por cada mensaje** de `/tf`, y cada
-publisher nuevo tiene que ser descubierto por DDS antes de que su mensaje
-llegue: recien lanzado el puente la latencia es de 1 ms, pero con el tiempo
-se degrada hasta perder la mitad de las poses (2 Hz efectivos tras media
-hora). Los topics de IPS e IMU salen de publishers fijos y llegan siempre a
-la cadencia del simulador, unos 4 a 5 Hz. El parametro `pose_source`
-permite volver a `tf`.
-
-Cada pose nueva dispara un ciclo de control en el instante en que llega: no
-se calcula sobre datos viejos ni se pierden ciclos. La cadencia del puente
-es la cadencia del lazo.
+Los nodos leen la pose de dos topics del bridge, `/autodrive/f1tenth_1/ips`
+(posición) y `/autodrive/f1tenth_1/imu` (orientación), y no del TF. Son los
+mismos números pero la entrega del TF se degrada con el tiempo: recién
+lanzado el puente la latencia es de 1 ms, pero con el tiempo se degrada
+hasta perder la mitad de las poses. Los topics de IPS e IMU salen de
+publishers fijos y llegan siempre a la cadencia del simulador, unos 4 a 5 Hz.
+El parámetro `pose_source` permite volver a `tf`.
 
 ## El controlador
 
