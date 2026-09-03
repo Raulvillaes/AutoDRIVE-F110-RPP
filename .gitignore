@@ -5,3 +5,6 @@ install/
 log/
 venv/
 .vscode/
+
+# notas de trabajo, no forman parte de la entrega
+CONTEXTO.md
