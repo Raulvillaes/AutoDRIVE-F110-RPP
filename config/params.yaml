@@ -19,7 +19,11 @@ rpp_node:
     # de periodo porque L_d / v se acerca al retardo) y corto en curva
     # (1.0 m a 1.9 m/s: con 1.5 m apuntaba a la curva siguiente en las eses
     # y se abria). Lo consigue el escalado con la velocidad.
-    lookahead_time: 0.55         # s, L_d = lookahead_time * velocidad medida
+    # El escalado usa la velocidad prevista para dentro de command_delay
+    # segundos (la medida llevada hacia la objetivo dentro de los limites de
+    # aceleracion), no la medida ahora: el Pure Pursuit trabaja sobre la pose
+    # predicha y en ese intervalo el coche frena o acelera hasta 0.45 m/s.
+    lookahead_time: 0.55         # s, L_d = lookahead_time * velocidad prevista
     lookahead_min: 0.8           # m
     lookahead_max: 1.5           # m
 

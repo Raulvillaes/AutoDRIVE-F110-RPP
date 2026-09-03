@@ -237,7 +237,7 @@ queda a mas de 1 m, repite la busqueda sobre toda la vuelta.
 ### Lookahead adaptativo
 
 ```
-L_d = clamp(lookahead_time * v_medida, lookahead_min, lookahead_max)
+L_d = clamp(lookahead_time * v_prevista, lookahead_min, lookahead_max)
 ```
 
 Un lookahead corto sigue la trayectoria con precision pero oscila a
@@ -245,6 +245,21 @@ velocidad alta; uno largo es estable pero recorta las curvas. Escalarlo con
 la velocidad da lo mejor de cada caso, y los limites evitan que a velocidad
 cero apunte al punto mas cercano (inestable) o que en recta apunte
 demasiado lejos.
+
+La velocidad que escala `L_d` no es la medida ahora sino la que tendra el
+coche cuando actue el mando, por coherencia con la
+[compensacion del retardo](#compensacion-del-retardo): el Pure Pursuit se
+aplica sobre la pose predicha `command_delay` segundos por delante, y en
+ese intervalo el coche esta frenando para entrar en curva o acelerando al
+salir. Con los parametros actuales la diferencia llega a
+`max_decel * command_delay = 0.45 m/s`, un 17 % de `lookahead_max`, y va
+siempre en el sentido malo: al entrar en curva el `L_d` se queda largo
+justo donde recortar cuesta caro. Se estima llevando la velocidad medida
+hacia la objetivo del ciclo previo dentro de los limites de aceleracion.
+En la simulacion cerrada no empeora ningun escenario y gana cuanto peor es
+el caso (a 5 Hz, error lateral de 7.1 a 5.9 cm rms y de 4.7 a 4.0 cm en
+curva; con 0.45 s de retardo, vuelta de 18.5 a 17.9 s y traqueteo del
+mando un 17 % menor).
 
 Cuanto recorta se puede estimar: el arco del Pure Pursuit se separa de la
 cuerda hasta `L_d^2 / (8 r)`. En la curva de 1 m de radio, `L_d = 0.8 m`

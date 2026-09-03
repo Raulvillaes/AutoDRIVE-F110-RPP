@@ -3,7 +3,8 @@
 Cada pose nueva del puente dispara un ciclo de control:
 
 1. Punto mas cercano de la trayectoria y punto de lookahead a L_d metros,
-   con L_d proporcional a la velocidad medida y acotado.
+   con L_d proporcional a la velocidad prevista para dentro de
+   `command_delay` segundos y acotado.
 2. Curvatura del arco que lleva al lookahead, gamma = 2*y_L / L_d^2 (y_L es
    la coordenada lateral del lookahead en el marco del vehiculo), y angulo
    de direccion por bicicleta cinematica, delta = atan(L * gamma).
@@ -250,8 +251,7 @@ class RppNode(Node):
                                     self.steering_lag)
 
         # 1. Lookahead adaptativo y punto objetivo sobre la trayectoria.
-        lookahead = clamp(self.lookahead_time * abs(v_meas),
-                          self.lookahead_min, self.lookahead_max)
+        lookahead = self.lookahead_distance(v_meas)
         self.idx = self.traj.nearest_index(px, py, hint=self.idx)
         lx, ly, _ = self.traj.lookahead_point(px, py, self.idx, lookahead)
 
@@ -297,6 +297,25 @@ class RppNode(Node):
                 'throttle_cmd': throttle_cmd})
         self.prev_pose = pose
         self.v_target = v_target
+
+    def lookahead_distance(self, v_meas):
+        """Lookahead adaptativo, L_d = lookahead_time * v, acotado.
+
+        La velocidad que manda es la que tendra el coche cuando actue este
+        mando, no la de ahora: el Pure Pursuit se aplica sobre la pose
+        predicha `command_delay` segundos por delante, y en ese intervalo
+        el coche esta frenando para entrar en curva o acelerando al salir
+        (hasta max_decel * command_delay = 0.45 m/s con los parametros
+        actuales, un 17 % de lookahead_max). Se estima llevando la
+        velocidad medida hacia la objetivo del ciclo previo dentro de lo
+        que permiten los limites de aceleracion.
+        """
+        v = abs(v_meas)
+        if self.command_delay > 0.0:
+            v = abs(clamp(self.v_target,
+                          v_meas - self.max_decel * self.command_delay,
+                          v_meas + self.max_accel * self.command_delay))
+        return clamp(self.lookahead_time * v, self.lookahead_min, self.lookahead_max)
 
     def remember_steering(self, t, delta):
         """Guarda el mando de direccion publicado (con el sello de la pose
