@@ -7,13 +7,19 @@ Cada pose nueva del puente dispara un ciclo de control:
 2. Curvatura del arco que lleva al lookahead, gamma = 2*y_L / L_d^2 (y_L es
    la coordenada lateral del lookahead en el marco del vehiculo), y angulo
    de direccion por bicicleta cinematica, delta = atan(L * gamma).
-3. Velocidad objetivo: la maxima, regulada por (a) la curvatura del arco,
-   con un suelo para que las curvas no dejen el coche parado, (b) la
-   proximidad de obstaculos vista por el LiDAR, que si puede frenar del
-   todo, y (c) el limite de aceleracion.
+3. Velocidad objetivo: la maxima, regulada por (a) la curvatura, tanto
+   la del arco actual como la del camino que viene, esta ultima como un
+   perfil de velocidad precalculado sobre el CSV con distancia de frenada
+   (trajectory.speed_profile); (b) la proximidad de obstaculos vista por
+   el LiDAR, que si puede frenar del todo; y (c) el limite de aceleracion.
 4. Conversion de la velocidad objetivo a mando de acelerador normalizado
    (prealimentacion medida mas correccion proporcional) y de delta al mando
    de direccion normalizado del simulador.
+
+El retardo entre mandar y ver el efecto (0.5 a 1 s en el puente de
+AutoDRIVE) se compensa aplicando los pasos 1 a 3 sobre la pose predicha
+`command_delay` segundos por delante con los mandos ya publicados y un
+servo de direccion de primer orden (`steering_lag`), ver prediction.py.
 
 Referencia: S. Macenski, S. Singh, F. Martin, J. Gines, "Regulated Pure
 Pursuit for Robot Path Tracking", Autonomous Robots, 2023 (es el
@@ -35,18 +41,20 @@ from std_msgs.msg import Float32
 from visualization_msgs.msg import Marker
 
 from rpp_f110 import runner
+from rpp_f110.prediction import predict_pose
 from rpp_f110.trajectory import Trajectory, resolve_trajectory_path
 from rpp_f110.vehicle_pose import stamp_to_sec, subscribe_vehicle_pose
 
 THROTTLE_TOPIC = '/autodrive/f1tenth_1/throttle_command'
 STEERING_TOPIC = '/autodrive/f1tenth_1/steering_command'
+STEERING_FEEDBACK_TOPIC = '/autodrive/f1tenth_1/steering'
 LIDAR_TOPIC = '/autodrive/f1tenth_1/lidar'
 ENCODER_TOPICS = {'left': '/autodrive/f1tenth_1/left_encoder',
                   'right': '/autodrive/f1tenth_1/right_encoder'}
 
-LOG_FIELDS = ['t', 'x', 'y', 'yaw', 'idx', 'lookahead', 'gamma', 'kappa_ahead', 'steer_cmd',
-              'v_tf', 'v_enc', 'v_target', 'v_curv', 'v_prox', 'd_front',
-              'throttle_cmd']
+LOG_FIELDS = ['t', 'x', 'y', 'yaw', 'x_pred', 'y_pred', 'yaw_pred', 'idx', 'lookahead',
+              'gamma', 'steer_cmd', 'steer_fb', 'yaw_rate', 'v_tf', 'v_enc', 'v_profile',
+              'v_curv', 'v_prox', 'v_target', 'd_front', 'throttle_cmd']
 
 
 def clamp(value, lo, hi):
@@ -70,12 +78,14 @@ class RppNode(Node):
             ('max_speed', 1.0),
             ('min_speed', 0.3),
             ('regulated_min_radius', 1.3),
-            ('curvature_lookahead', 1.5),
+            ('max_lateral_accel', 0.0),
             ('proximity_distance', 0.8),
             ('proximity_gain', 1.0),
             ('proximity_fov', 30.0),
             ('max_accel', 1.0),
             ('max_decel', 2.0),
+            ('command_delay', 0.0),
+            ('steering_lag', 0.0),
             ('throttle_offset', 0.0),
             ('throttle_per_mps', 0.2),
             ('speed_kp', 0.15),
@@ -97,12 +107,14 @@ class RppNode(Node):
         self.max_speed = p('max_speed')
         self.min_speed = p('min_speed')
         self.regulated_min_radius = p('regulated_min_radius')
-        self.curvature_lookahead = p('curvature_lookahead')
+        self.max_lateral_accel = p('max_lateral_accel')
         self.proximity_distance = p('proximity_distance')
         self.proximity_gain = p('proximity_gain')
         self.proximity_half_fov = math.radians(p('proximity_fov')) / 2.0
         self.max_accel = p('max_accel')
         self.max_decel = p('max_decel')
+        self.command_delay = p('command_delay')
+        self.steering_lag = p('steering_lag')
         self.throttle_offset = p('throttle_offset')
         self.throttle_per_mps = p('throttle_per_mps')
         self.speed_kp = p('speed_kp')
@@ -115,6 +127,11 @@ class RppNode(Node):
 
         csv_path = resolve_trajectory_path(p('trajectory_csv'))
         self.traj = Trajectory.from_csv(csv_path)
+        # Regulacion por curvatura del camino que viene, resuelta una vez
+        # para toda la vuelta con distancia de frenada (ver trajectory.py).
+        self.v_profile = self.traj.speed_profile(
+            self.max_speed, self.regulated_min_radius, self.min_speed,
+            self.max_accel, self.max_decel, self.max_lateral_accel)
 
         # ---------- Estado ----------
         self.idx = None            # indice del punto mas cercano (ciclo previo)
@@ -125,6 +142,8 @@ class RppNode(Node):
         self.enc_speed = {'left': 0.0, 'right': 0.0}
         self.v_target = 0.0        # velocidad objetivo del ciclo previo
         self.d_front = math.inf    # distancia libre en el sector frontal
+        self.steer_history = []    # (sello de pose, delta rad) publicados, para predecir
+        self.steer_fb = 0.0        # realimentacion de direccion del puente (solo registro)
         self.scan_mask = None      # rayos dentro del sector frontal
         self.last_pose_wall = None
         self.watchdog_stopped = False
@@ -139,6 +158,9 @@ class RppNode(Node):
         self.pose_subs = subscribe_vehicle_pose(self, self.on_pose, p('pose_source'))
         self.scan_sub = self.create_subscription(
             LaserScan, LIDAR_TOPIC, self.on_scan, 10)
+        self.steer_fb_sub = self.create_subscription(
+            Float32, STEERING_FEEDBACK_TOPIC,
+            lambda msg: setattr(self, 'steer_fb', msg.data), 10)
         self.enc_subs = [
             self.create_subscription(
                 JointState, topic,
@@ -157,6 +179,9 @@ class RppNode(Node):
             f'RPP listo: {self.traj.n} puntos, vuelta de {self.traj.length:.2f} m '
             f'({csv_path}). max_speed={self.max_speed} m/s, '
             f'L_d en [{self.lookahead_min}, {self.lookahead_max}] m, '
+            f'perfil de velocidad en [{self.v_profile.min():.2f}, {self.v_profile.max():.2f}] m/s '
+            f'(vuelta ideal {self.traj.length / self.v_profile.mean():.1f} s), '
+            f'retardo compensado {self.command_delay} s + servo {self.steering_lag} s, '
             f'pose por "{p("pose_source")}", velocidad por "{self.speed_source}".')
 
     # ------------------------------------------------------------------
@@ -216,25 +241,34 @@ class RppNode(Node):
         self.update_tf_speed(pose)
         v_meas = self.measured_speed()
 
+        # 0. Compensacion del retardo: el mando que sale de este ciclo
+        #    actuara command_delay segundos despues; se controla desde la
+        #    pose que tendra el coche entonces, integrando los mandos que
+        #    ya estan en camino.
+        px, py, pyaw = predict_pose(pose.x, pose.y, pose.yaw, v_meas, self.wheelbase,
+                                    self.steer_history, pose.t, self.command_delay,
+                                    self.steering_lag)
+
         # 1. Lookahead adaptativo y punto objetivo sobre la trayectoria.
         lookahead = clamp(self.lookahead_time * abs(v_meas),
                           self.lookahead_min, self.lookahead_max)
-        self.idx = self.traj.nearest_index(pose.x, pose.y, hint=self.idx)
-        lx, ly, _ = self.traj.lookahead_point(pose.x, pose.y, self.idx, lookahead)
+        self.idx = self.traj.nearest_index(px, py, hint=self.idx)
+        lx, ly, _ = self.traj.lookahead_point(px, py, self.idx, lookahead)
 
         # 2. Curvatura del arco y angulo de direccion.
-        dx, dy = lx - pose.x, ly - pose.y
-        y_l = -math.sin(pose.yaw) * dx + math.cos(pose.yaw) * dy
+        dx, dy = lx - px, ly - py
+        y_l = -math.sin(pyaw) * dx + math.cos(pyaw) * dy
         d2 = dx * dx + dy * dy
         gamma = 2.0 * y_l / d2 if d2 > 1e-6 else 0.0
         delta = math.atan(self.wheelbase * gamma)
         steer_cmd = clamp(delta / self.max_steering_angle, -1.0, 1.0)
 
-        # 3. Velocidad objetivo con las tres regulaciones. La curvatura que
-        #    regula es la mayor entre la del arco actual y la del camino que
-        #    viene (curvature_lookahead metros): asi frena antes de la curva.
-        kappa_ahead = self.traj.max_curvature_ahead(self.idx, self.curvature_lookahead)
-        v_curv = max(self.regulate_curvature(self.max_speed, max(abs(gamma), kappa_ahead)),
+        # 3. Velocidad objetivo con las tres regulaciones. La curvatura
+        #    regula por dos vias: la del arco actual (lo que el coche esta
+        #    girando) y el perfil precalculado del camino (frena antes de la
+        #    curva con distancia de frenada). Manda la menor.
+        v_profile = float(self.v_profile[self.idx])
+        v_curv = max(min(v_profile, self.regulate_curvature(self.max_speed, gamma)),
                      self.min_speed)
         v_prox = self.regulate_proximity(v_curv)
         dt = pose.t - self.prev_pose.t if self.prev_pose else None
@@ -243,36 +277,51 @@ class RppNode(Node):
         # 4. Mandos normalizados al simulador.
         throttle_cmd = self.speed_to_throttle(v_target, v_meas)
         self.publish_commands(throttle_cmd, steer_cmd)
+        self.remember_steering(pose.t, delta)
         self.publish_debug(lx, ly, v_target, v_meas)
 
         self.get_logger().info(
-            f'v={v_meas:4.2f} obj={v_target:4.2f} m/s  L_d={lookahead:.2f} m  '
-            f'giro={math.degrees(delta):+5.1f} deg  k_adel={kappa_ahead:4.2f}  libre={self.d_front:4.2f} m  '
-            f'idx={self.idx}', throttle_duration_sec=1.0)
+            f'v={v_meas:4.2f} obj={v_target:4.2f} perfil={v_profile:4.2f} m/s  '
+            f'L_d={lookahead:.2f} m  giro={math.degrees(delta):+5.1f} deg  '
+            f'libre={self.d_front:4.2f} m  idx={self.idx}', throttle_duration_sec=1.0)
 
         if self.log_writer is not None:
             self.log_writer.writerow({
                 't': pose.t, 'x': pose.x, 'y': pose.y, 'yaw': pose.yaw,
+                'x_pred': px, 'y_pred': py, 'yaw_pred': pyaw,
                 'idx': self.idx, 'lookahead': lookahead, 'gamma': gamma,
-                'kappa_ahead': kappa_ahead,
-                'steer_cmd': steer_cmd, 'v_tf': self.v_tf, 'v_enc': self.v_enc,
-                'v_target': v_target, 'v_curv': v_curv, 'v_prox': v_prox,
-                'd_front': self.d_front, 'throttle_cmd': throttle_cmd})
+                'steer_cmd': steer_cmd, 'steer_fb': self.steer_fb, 'yaw_rate': pose.yaw_rate,
+                'v_tf': self.v_tf, 'v_enc': self.v_enc,
+                'v_profile': v_profile, 'v_curv': v_curv, 'v_prox': v_prox,
+                'v_target': v_target, 'd_front': self.d_front,
+                'throttle_cmd': throttle_cmd})
         self.prev_pose = pose
         self.v_target = v_target
+
+    def remember_steering(self, t, delta):
+        """Guarda el mando de direccion publicado (con el sello de la pose
+        que lo provoco) para la prediccion; solo hacen falta los de los
+        ultimos command_delay segundos."""
+        self.steer_history.append((t, delta))
+        horizon = t - self.command_delay - 4.0 * max(self.steering_lag, 0.25)
+        while len(self.steer_history) > 1 and self.steer_history[1][0] < horizon:
+            self.steer_history.pop(0)
 
     # ------------------------------------------------------------------
     # Las tres regulaciones del RPP
     # ------------------------------------------------------------------
     def regulate_curvature(self, speed, gamma):
         """Regulacion por curvatura: si el radio (1/curvatura) baja del
-        radio minimo regulado, la velocidad escala linealmente con el radio.
-        Quien llama le pone el suelo min_speed: una curva nunca para el coche."""
+        radio minimo regulado, la velocidad escala linealmente con el radio;
+        y con max_lateral_accel > 0 no pasa de sqrt(a_lat * r). Quien llama
+        le pone el suelo min_speed: una curva nunca para el coche."""
         if abs(gamma) < 1e-9:
             return speed
         radius = 1.0 / abs(gamma)
         if radius < self.regulated_min_radius:
-            return speed * radius / self.regulated_min_radius
+            speed = speed * radius / self.regulated_min_radius
+        if self.max_lateral_accel > 0.0:
+            speed = min(speed, math.sqrt(self.max_lateral_accel * radius))
         return speed
 
     def regulate_proximity(self, speed):

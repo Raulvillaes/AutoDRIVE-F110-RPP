@@ -15,27 +15,46 @@ rpp_node:
     max_steering_angle: 0.524    # rad que da el mando de direccion 1.0
 
     # ---- Pure Pursuit: lookahead adaptativo ----
-    lookahead_time: 1.5          # s, L_d = lookahead_time * velocidad medida
+    # Largo en recta (1.5 m a 2.7 m/s: con 1.0 m el mando zigzaguea a 0.6 s
+    # de periodo porque L_d / v se acerca al retardo) y corto en curva
+    # (1.0 m a 1.9 m/s: con 1.5 m apuntaba a la curva siguiente en las eses
+    # y se abria). Lo consigue el escalado con la velocidad.
+    lookahead_time: 0.55         # s, L_d = lookahead_time * velocidad medida
     lookahead_min: 0.8           # m
-    lookahead_max: 2.5           # m
+    lookahead_max: 1.5           # m
+
+    # ---- Compensacion del retardo mando -> efecto ----
+    # Medir con tools/measure_delay.py en cada maquina: command_delay es el
+    # retardo puro (tiempo al 10 % del escalon) y steering_lag la constante
+    # de tiempo del servo ((t90 - t10) / 2.2). 0 = sin compensar. En la
+    # simulacion cerrada (tools/closed_loop_sim.py) un error de 0.2 s en
+    # cualquier sentido ya duplica el error lateral a 2.7 m/s: medirlo.
+    # Medidos en el escritorio (puente a 7.5 Hz): retardo puro 0.19-0.40 s,
+    # mediana 0.32; la realimentacion salta en una muestra, servo < 0.13 s.
+    command_delay: 0.3           # s
+    steering_lag: 0.05           # s
 
     # ---- Velocidad y sus tres regulaciones ----
-    max_speed: 1.2               # m/s, velocidad de crucero en recta
-    min_speed: 0.4               # m/s, suelo de la regulacion por curvatura
-    regulated_min_radius: 2.0    # m, por debajo de este radio se frena
-    curvature_lookahead: 2.0     # m de camino por delante cuya curvatura tambien regula
+    max_speed: 2.7               # m/s, velocidad de crucero en recta
+    min_speed: 0.5               # m/s, suelo de la regulacion por curvatura
+    regulated_min_radius: 2.5    # m, por debajo de este radio se frena
+    max_lateral_accel: 1.8       # m/s^2, v <= sqrt(a_lat * r); 0 = sin limite.
+                                 # Medido: por encima de ~2 m/s^2 el coche subvira
+    # La curvatura del camino que viene regula con un perfil precalculado
+    # sobre el CSV (velocidad de curva + frenada con max_decel + aceleracion
+    # con max_accel), asi que no hay distancia de anticipacion fija.
     proximity_distance: 1.0      # m, distancia frontal a la que empieza a frenar
     proximity_gain: 1.0          # ganancia de la regulacion por proximidad
-    proximity_fov: 30.0          # grados, abertura total del sector frontal del LiDAR
-    max_accel: 1.0               # m/s^2
-    max_decel: 2.0               # m/s^2
+    proximity_fov: 20.0          # grados, abertura total del sector frontal del LiDAR
+    max_accel: 2.0               # m/s^2
+    max_decel: 1.5               # m/s^2, tambien fija donde empieza a frenar el perfil
 
     # ---- Velocidad -> mando de acelerador [0, 1] ----
     # mando = throttle_offset + throttle_per_mps * v_obj + speed_kp * (v_obj - v_medida)
-    # PROVISIONALES hasta medir con tools/measure_speed.py
+    # Medidos con tools/measure_speed.py: 5 m/s por unidad de mando, sin zona muerta.
     throttle_offset: 0.0
     throttle_per_mps: 0.2
-    speed_kp: 0.10
+    speed_kp: 0.05               # con retardo, mas ganancia se pasa de velocidad
     throttle_min: 0.0            # 0.0 = frenar solo por inercia; negativo = freno motor
     throttle_max: 1.0
 

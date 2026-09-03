@@ -2,7 +2,7 @@
 
 Carga el CSV que entrega AutoDRIVE-F110-Global-Planner (columnas x, y, s,
 kappa) y resuelve la geometria que necesita el Pure Pursuit: punto mas
-cercano y punto de lookahead. La lista es ciclica: tras el ultimo punto
+cercano, punto de lookahead y perfil de velocidad. La lista es ciclica: tras el ultimo punto
 viene el primero, asi que ningun indice se sale de rango y el seguimiento
 no se interrumpe al cerrar la vuelta.
 
@@ -109,14 +109,46 @@ class Trajectory:
         # Ningun punto llega a `distance`: lookahead mayor que la pista.
         return float(self.x[start]), float(self.y[start]), start
 
-    def max_curvature_ahead(self, start, distance):
-        """Mayor |kappa| del CSV en los proximos `distance` metros de camino
-        a partir del punto `start` (ciclico). Sirve para frenar ANTES de
-        entrar en una curva, no cuando el arco al lookahead ya se cierra."""
-        step = self.length / self.n
-        count = max(1, int(math.ceil(distance / step)) + 1)
-        idx = (start + np.arange(count)) % self.n
-        return float(np.abs(self.kappa[idx]).max())
+    def speed_profile(self, max_speed, min_radius, min_speed, max_accel, max_decel,
+                      max_lateral_accel=0.0):
+        """Velocidad admisible en cada punto del CSV (m/s), calculada una vez.
+
+        Es la regulacion por curvatura del RPP aplicada a toda la vuelta y
+        con distancia de frenada, en tres pasadas:
+
+        1. Velocidad de curva: `max_speed`, o `max_speed * r / min_radius`
+           donde el radio r = 1/|kappa| baja de `min_radius`, con el suelo
+           `min_speed`. Con `max_lateral_accel` > 0 se limita ademas a
+           sqrt(a_lat * r), la velocidad a la que la aceleracion lateral
+           v^2 / r llega a ese valor: la regla lineal del RPP da mas
+           aceleracion lateral cuanto mas abierta es la curva, y el coche
+           subvira por encima de ~2 m/s^2 (medido en el registro).
+        2. Pasada hacia atras (frenada): ningun punto puede ir mas rapido
+           de lo que permite frenar con `max_decel` hasta la velocidad del
+           punto siguiente: v_i <= sqrt(v_{i+1}^2 + 2 * a * ds).
+        3. Pasada hacia delante (aceleracion): lo mismo con `max_accel`
+           desde el punto anterior.
+
+        Asi el coche frena justo lo necesario antes de cada curva, en vez
+        de rodar a velocidad de curva desde una distancia fija, y el ruido
+        de la curvatura no produce frenazos: un pico aislado de kappa solo
+        limita ese punto y la frenada lo suaviza. La lista es ciclica, por
+        eso cada pasada se repite dos veces: la segunda propaga el cierre.
+        """
+        radius = 1.0 / np.maximum(np.abs(self.kappa), 1e-9)
+        v = np.minimum(max_speed, max_speed * radius / min_radius)
+        if max_lateral_accel > 0.0:
+            v = np.minimum(v, np.sqrt(max_lateral_accel * radius))
+        v = np.maximum(v, min_speed)
+        ds = self.length / self.n
+        for _ in range(2):
+            for i in range(self.n - 1, -1, -1):
+                j = (i + 1) % self.n
+                v[i] = min(v[i], math.sqrt(v[j] ** 2 + 2.0 * max_decel * ds))
+            for i in range(self.n):
+                j = (i + 1) % self.n
+                v[j] = min(v[j], math.sqrt(v[i] ** 2 + 2.0 * max_accel * ds))
+        return v
 
     def heading(self, i):
         """Rumbo (rad) del segmento que sale del punto i, ciclico."""

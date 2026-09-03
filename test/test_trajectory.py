@@ -63,10 +63,51 @@ def test_bundled_csv_loads():
     assert t.nearest_index(0.745, 3.158) >= t.n - 4
 
 
-def test_max_curvature_ahead_previews_the_bend():
+def test_speed_profile_constant_on_a_circle():
+    # circulo de r = 1 m con radio regulado 2 m: velocidad de curva = max/2
+    a = np.linspace(0.0, 2 * math.pi, 100, endpoint=False)
+    t = Trajectory(np.cos(a), np.sin(a), kappa=np.ones(100))
+    v = t.speed_profile(2.0, 2.0, 0.3, 1.0, 1.0)
+    assert v == pytest.approx(np.full(100, 1.0))
+
+
+def test_speed_profile_respects_braking_and_acceleration():
+    # recta de 100 puntos con una curva cerrada en el medio
+    kappa = np.zeros(100)
+    kappa[50:55] = 1.0
+    t = Trajectory(np.arange(100) * 0.1, np.zeros(100), kappa=kappa)
+    vmax, amax, adec = 3.0, 1.0, 2.0
+    v = t.speed_profile(vmax, 2.0, 0.5, amax, adec)
+    ds = t.length / t.n
+    assert v.max() == pytest.approx(vmax)
+    assert v[50:55] == pytest.approx(1.5)          # 3.0 * r / 2.0 con r = 1
+    for i in range(t.n):
+        j = (i + 1) % t.n
+        # frenada: v_i^2 - v_j^2 <= 2 a ds; aceleracion: v_j^2 - v_i^2 <= 2 a ds
+        assert v[i] ** 2 - v[j] ** 2 <= 2 * adec * ds + 1e-9
+        assert v[j] ** 2 - v[i] ** 2 <= 2 * amax * ds + 1e-9
+    # frena antes de la curva, no en ella, y acelera al salir
+    assert v[45] < vmax and v[45] > v[49]
+    assert v[60] > v[55]
+
+
+def test_speed_profile_of_the_bundled_csv():
     t = Trajectory.from_csv(CSV)
-    # en plena recta inicial no hay curvatura a 1 m, pero si a 3 m del final
-    assert t.max_curvature_ahead(10, 1.0) < 0.05
-    assert t.max_curvature_ahead(55, 3.0) > 0.3
-    # ciclico: desde el ultimo punto sigue por el primero
-    assert t.max_curvature_ahead(t.n - 1, 2.0) < 0.15
+    v = t.speed_profile(2.7, 2.5, 0.5, 2.0, 2.2)
+    # la curva de 1.01 m de radio limita a 2.7 * 1.01 / 2.5
+    assert v.min() == pytest.approx(2.7 * 1.01 / 2.5, abs=0.02)
+    assert v.max() == pytest.approx(2.7)
+    # en plena recta inicial va a tope y al final de la recta ya frena
+    assert v[20] == pytest.approx(2.7)
+    assert v[65] < 2.7
+
+
+def test_speed_profile_lateral_acceleration_cap():
+    a = np.linspace(0.0, 2 * math.pi, 100, endpoint=False)
+    r = 2.0
+    t = Trajectory(r * np.cos(a), r * np.sin(a), kappa=np.full(100, 1.0 / r))
+    # sin limite lateral la regla lineal da max_speed * r / r_min = 2.7 * 2 / 2.5
+    assert t.speed_profile(2.7, 2.5, 0.3, 1.0, 1.0).max() == pytest.approx(2.16, abs=1e-6)
+    # con a_lat 1.8: sqrt(1.8 * 2) = 1.897, que es menor y manda
+    v = t.speed_profile(2.7, 2.5, 0.3, 1.0, 1.0, max_lateral_accel=1.8)
+    assert v == pytest.approx(np.full(100, math.sqrt(3.6)))

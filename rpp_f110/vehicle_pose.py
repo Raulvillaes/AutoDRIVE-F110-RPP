@@ -40,6 +40,7 @@ class VehiclePose:
     x: float      # m, marco map
     y: float      # m, marco map
     yaw: float    # rad, rumbo antihorario desde +x
+    yaw_rate: float = 0.0   # rad/s del IMU (0 con pose por tf)
 
 
 def yaw_from_quaternion(qx, qy, qz, qw):
@@ -90,7 +91,8 @@ def subscribe_vehicle_pose(node, callback, source='sensors',
         q = msg.orientation
         x, y = latest['ips']
         callback(VehiclePose(stamp_to_sec(msg.header.stamp), x, y,
-                             yaw_from_quaternion(q.x, q.y, q.z, q.w)))
+                             yaw_from_quaternion(q.x, q.y, q.z, q.w),
+                             msg.angular_velocity.z))
 
     return [node.create_subscription(Point, IPS_TOPIC, on_ips, 10),
             node.create_subscription(Imu, IMU_TOPIC, on_imu, 10)]

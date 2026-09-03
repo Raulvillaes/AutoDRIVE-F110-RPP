@@ -28,20 +28,19 @@ Segunda parte del proyecto final de Vehiculos no Tripulados. La primera parte
 
 ## Resultado
 
-Vueltas consecutivas sin tocar el muro a 1.2 m/s de crucero, con frenado
-anticipado a 0.5 m/s en las curvas de 1 m de radio:
+Diez vueltas consecutivas sin tocar el muro a 2.7 m/s de crucero, con el
+perfil de velocidad frenando a 1.1 m/s en la curva de 1 m de radio (la
+vuelta 1 incluye la salida desde parado):
 
-| Vuelta | Tiempo |
-|-------:|-------:|
-| 1 | 25.42 s |
-| 2 | 25.33 s |
-| 3 | 25.38 s |
-| 4 | 25.30 s |
-| 5 | 25.34 s |
+| Vuelta | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Tiempo (s) | 14.14 | 13.83 | 13.78 | 13.76 | 13.70 | 13.70 | 13.69 | 13.73 | 13.79 | 13.71 |
 
-Vuelta de 27.85 m, velocidad media 1.10 m/s. Error lateral respecto a la
-trayectoria de 7 cm (rms) y 31 cm maximo; holgura minima al muro vista por
-el LiDAR de 0.47 m. El lazo corre a la cadencia del puente, unos 5 Hz.
+Vuelta de 27.85 m, velocidad media 1.96 m/s. Error lateral respecto a la
+trayectoria de 12 cm (rms) y 26 cm maximo; holgura minima al muro vista
+por el LiDAR de 1.02 m, y la regulacion por proximidad no llego a actuar.
+El lazo corre a la cadencia del puente en esa maquina, unos 10 Hz, con un
+retardo mando -> efecto de 0.3 s compensado.
 
 ## Prerrequisitos
 
@@ -247,20 +246,86 @@ la velocidad da lo mejor de cada caso, y los limites evitan que a velocidad
 cero apunte al punto mas cercano (inestable) o que en recta apunte
 demasiado lejos.
 
+Cuanto recorta se puede estimar: el arco del Pure Pursuit se separa de la
+cuerda hasta `L_d^2 / (8 r)`. En la curva de 1 m de radio, `L_d = 0.8 m`
+desvia 8 cm, `L_d = 1.65 m` desvia 34 cm y `L_d = 2.5 m` desvia 78 cm, con
+0.6 m de semiancho de pista. Por eso el lookahead en curva tiene que ser
+corto, y lo que permite acortarlo sin oscilar es la
+[compensacion del retardo](#compensacion-del-retardo).
+
+### Compensacion del retardo
+
+Entre publicar un mando y ver su efecto en la pose pasan `command_delay`
+segundos (0.5 a 1 s en el puente de AutoDRIVE, ver
+[Retardo y estabilidad](#retardo-y-estabilidad)). Los mandos publicados en
+ese intervalo todavia no han actuado. Antes de aplicar el Pure Pursuit se
+integra el modelo de bicicleta con esos mandos pendientes y la velocidad
+medida:
+
+```
+x    += v cos(yaw) dt
+y    += v sin(yaw) dt
+yaw  += v tan(delta_i) / L * dt        para cada mando pendiente delta_i
+```
+
+y el punto mas cercano, el lookahead y la curvatura se calculan desde esa
+pose predicha, que es donde estara el coche cuando el mando de este ciclo
+llegue a las ruedas (`prediction.py`). El servo de direccion tampoco es
+instantaneo: en la integracion el angulo real de las ruedas persigue al
+mandado como un sistema de primer orden con constante `steering_lag`.
+Con `command_delay = 0` se desactiva y el controlador es el RPP sin mas.
+Los dos tiempos se miden con `tools/measure_delay.py` en cada maquina.
+
+La simulacion cerrada de `tools/closed_loop_sim.py` (bicicleta cinematica,
+retardo puro, servo de primer orden y el acelerador medido, a 4.5 Hz) da
+la medida de lo que aporta cada pieza con los parametros actuales y un
+retardo real de 0.5 s mas un servo de 0.15 s:
+
+| Compensacion | Vueltas | Error lateral rms / max |
+|---|---|---|
+| ninguna (`command_delay = 0`) | no completa una vuelta | 0.70 / 1.64 m |
+| retardo puro (`steering_lag = 0`) | 13.5 s | 0.19 / 0.44 m |
+| retardo + servo (config actual) | 13.3 s | 0.13 / 0.27 m |
+| sin retardo en el simulador | 12.9 s | 0.06 / 0.15 m |
+
+Y lo sensible que es al valor: con el retardo real 0.2 s por encima o por
+debajo del configurado el error rms sube a 0.3 m, y con retardos reales de
+0.8 s o mas ni bien compensado baja de 0.3 m a 2.7 m/s. El retardo es el
+parametro que mas importa y hay que medirlo en la maquina donde se corre.
+
 ### Las tres regulaciones
 
 Lo que distingue al RPP del Pure Pursuit clasico es que la velocidad
 objetivo no es fija: parte de `max_speed` y pasa por tres regulaciones.
 
-1. **Curvatura.** Si el radio del arco `1/|gamma|` baja de
-   `regulated_min_radius`, la velocidad escala linealmente con el radio:
-   `v = v * r / r_min`. El coche frena en las curvas cerradas en proporcion
-   a lo cerradas que son.
+1. **Curvatura.** Si el radio `r` baja de `regulated_min_radius`, la
+   velocidad escala linealmente con el radio: `v = max_speed * r / r_min`.
+   Se aplica por dos vias y manda la menor:
+   - al arco actual del Pure Pursuit, `r = 1 / |gamma|`: lo que el coche
+     esta girando ahora, incluida la correccion del error lateral;
+   - al camino que viene, como un **perfil de velocidad** calculado una
+     vez sobre el CSV (`trajectory.speed_profile`): velocidad de curva de
+     cada punto por su `kappa`, una pasada hacia atras que limita cada
+     punto a lo que permite frenar con `max_decel` hasta el siguiente
+     (`v_i <= sqrt(v_{i+1}^2 + 2 a ds)`) y una hacia delante con
+     `max_accel`. El coche frena justo lo necesario antes de cada curva, en
+     lugar de rodar a velocidad de curva desde una distancia fija, y un
+     pico de ruido en `kappa` no produce un frenazo.
+   - La regla lineal `v = max_speed * r / r_min` tiene un defecto fisico:
+     la aceleracion lateral `v^2 / r` crece con el radio, asi que las
+     curvas abiertas se toman con mas aceleracion lateral que las
+     cerradas. En el registro se midio que por encima de unos 2 m/s² la
+     guinada real queda un 10 a 20 % por debajo de la cinematica (el coche
+     subvira y se abre). Por eso hay un tope `v <= sqrt(max_lateral_accel * r)`
+     en las dos vias. Con los parametros actuales el perfil da una vuelta
+     ideal de 13.7 s frente a los 16 s de la regla anterior (maximo de
+     `kappa` a 2 m por delante).
 2. **Proximidad.** El LiDAR mira un sector frontal de `proximity_fov`
    grados. Si la distancia libre minima `d` baja de `proximity_distance`,
    `v = v * proximity_gain * d / proximity_distance`. En el circuito sin
-   obstaculos actua sobre todo al encarar una pared en la entrada de una
-   curva.
+   obstaculos es una red de seguridad: dentro de una curva el sector
+   frontal apunta al muro exterior, asi que el sector es estrecho (20°) y
+   la distancia corta (1 m) para que no frene una curva bien tomada.
 3. **Aceleracion.** La velocidad objetivo no puede cambiar mas de
    `max_accel * dt` al subir ni de `max_decel * dt` al bajar entre ciclos.
    Suaviza los escalones que dejan las dos anteriores.
@@ -307,8 +372,15 @@ tiene su propia dinamica. Con ese retardo el Pure Pursuit oscila si el
 tiempo de lookahead `L_d / v` se acerca al retardo: con `L_d / v = 1.0 s`
 el coche entro en la recta con 5° de rumbo desviado y el zigzag crecio
 (24, 31 y 37 cm) hasta el muro. Con `lookahead_time = 1.5 s` la correccion
-se amortigua. Por eso el lookahead minimo es 1.0 m y no menos, aunque en
-las curvas cerradas recorte un poco.
+se amortigua, pero un lookahead tan largo recorta las curvas cerradas.
+La salida es compensar el retardo (arriba): controlando desde la pose
+predicha el lazo ve el efecto de sus mandos "a tiempo" y el lookahead
+puede acortarse, pero no en recta: con `L_d = 1.0 m` a 2.7 m/s
+(`L_d / v = 0.37 s`, casi el retardo) el mando zigzagueaba con periodo de
+0.6 s y ±0.25 de amplitud aunque el error lateral fuera de 3 cm. Con
+`lookahead_time = 0.55 s` y maximo 1.5 m el lookahead es 1.5 m en la recta
+(mando cuatro veces mas quieto) y 1.0 m en las curvas a 1.9 m/s, que es lo
+que evita abrirse en las eses.
 
 ## Contador de vueltas y cronometro
 
@@ -336,9 +408,9 @@ la mejor y el acumulado:
 ```
 ==================================================
   VUELTA 3 COMPLETADA
-  Tiempo de vuelta:      PENDIENTE s
-  Mejor vuelta:          PENDIENTE s
-  Tiempo acumulado:      PENDIENTE s
+  Tiempo de vuelta:      13.78 s
+  Mejor vuelta:          13.78 s
+  Tiempo acumulado:      41.75 s
 ==================================================
 ```
 
@@ -350,7 +422,8 @@ rpp_f110/
   lap_node.py       contador de vueltas y cronometro: /tf -> terminal
   lap_counter.py    logica del cruce orientado y del cronometro (sin ROS, con pruebas)
   path_node.py      trayectoria como nav_msgs/Path y meta como Marker para RViz
-  trajectory.py     carga del CSV y geometria ciclica (punto mas cercano, lookahead)
+  trajectory.py     carga del CSV, geometria ciclica (punto mas cercano, lookahead) y perfil de velocidad
+  prediction.py     pose predicha con los mandos pendientes (compensacion del retardo, sin ROS)
   vehicle_pose.py   pose del vehiculo desde /tf (map -> f1tenth_1) y guinada del cuaternion
 config/
   params.yaml       parametros de los tres nodos
@@ -359,9 +432,12 @@ launch/
   rpp.launch.py     lanza los tres nodos; apaga todo cuando lap_node termina
 tools/
   measure_speed.py  escalon de acelerador: velocidad estacionaria, cadencia, frenada
+  measure_delay.py  escalones de direccion: retardo mando -> efecto, para command_delay
+  estimate_delay.py retardo por correlacion mando/realimentacion sobre un registro log_csv
+  closed_loop_sim.py simulacion cerrada del nodo sin AutoDRIVE (bicicleta + retardo + servo)
   replay_pose.py    publica /tf recorriendo el CSV, para probar sin simulador
 test/
-  test_trajectory.py, test_lap_counter.py   pruebas con pytest
+  test_trajectory.py, test_prediction.py, test_lap_counter.py   pruebas con pytest
 ```
 
 Funciones principales de `rpp_node.py`:
@@ -369,7 +445,8 @@ Funciones principales de `rpp_node.py`:
 | Funcion | Que hace |
 |---|---|
 | `on_pose` | ciclo de control completo, disparado por cada pose del TF |
-| `regulate_curvature` | regulacion 1: velocidad proporcional al radio del arco |
+| `regulate_curvature` | regulacion 1 (arco actual): velocidad proporcional al radio |
+| `remember_steering` | guarda los mandos publicados para la prediccion |
 | `regulate_proximity` | regulacion 2: velocidad proporcional a la distancia libre del LiDAR |
 | `limit_acceleration` | regulacion 3: limite de cambio de velocidad por ciclo |
 | `speed_to_throttle` | velocidad objetivo a mando de acelerador |
@@ -378,8 +455,10 @@ Funciones principales de `rpp_node.py`:
 | `check_pose_timeout` | acelerador a cero si el puente deja de publicar |
 | `stop_vehicle` | ceros al salir: el puente conserva el ultimo mando recibido |
 
-En `trajectory.py`: `nearest_index` (ventana ciclica con rebusqueda global)
-y `lookahead_point` (primer punto a `L_d`, interpolado). En
+En `trajectory.py`: `nearest_index` (ventana ciclica con rebusqueda global),
+`lookahead_point` (primer punto a `L_d`, interpolado) y `speed_profile`
+(regulacion 1 sobre el camino, con distancia de frenada). En
+`prediction.py`: `predict_pose`. En
 `lap_counter.py`: `crossing` (cruce orientado e instante interpolado) y
 `update` (estado del contador).
 
@@ -409,18 +488,20 @@ Todos en `config/params.yaml`. Los valores son los de las vueltas de
 | `trajectory_csv` | `""` | CSV de la trayectoria; vacio = `config/trajectory.csv` |
 | `wheelbase` | 0.33 m | batalla, del TF de la rueda delantera |
 | `max_steering_angle` | 0.524 rad | angulo con mando 1.0, medido |
-| `lookahead_time` | 1.5 s | `L_d = lookahead_time * v` |
-| `lookahead_min`, `lookahead_max` | 1.0, 2.5 m | limites de `L_d` |
-| `max_speed` | 1.2 m/s | velocidad de crucero |
-| `min_speed` | 0.4 m/s | suelo de la regulacion por curvatura |
-| `regulated_min_radius` | 1.5 m | radio por debajo del cual frena |
-| `curvature_lookahead` | 1.5 m | camino por delante cuya curvatura tambien regula |
+| `lookahead_time` | 0.55 s | `L_d = lookahead_time * v`: 1.5 m en recta, 1.0 m en curva |
+| `lookahead_min`, `lookahead_max` | 0.8, 1.5 m | limites de `L_d` |
+| `command_delay` | 0.5 s | retardo puro mando -> efecto que se compensa; 0 = sin compensar |
+| `steering_lag` | 0.15 s | constante de tiempo del servo de direccion en la prediccion |
+| `max_speed` | 2.7 m/s | velocidad de crucero |
+| `min_speed` | 0.5 m/s | suelo de la regulacion por curvatura |
+| `regulated_min_radius` | 2.5 m | radio por debajo del cual frena (arco y perfil) |
+| `max_lateral_accel` | 1.8 m/s² | tope `v <= sqrt(a_lat * r)`; 0 = sin tope |
 | `proximity_distance` | 1.0 m | distancia libre a la que empieza a frenar |
 | `proximity_gain` | 1.0 | ganancia de la regulacion por proximidad |
-| `proximity_fov` | 30° | abertura del sector frontal del LiDAR |
-| `max_accel`, `max_decel` | 1.0, 2.0 m/s² | limite de aceleracion y frenada |
+| `proximity_fov` | 20° | abertura del sector frontal del LiDAR |
+| `max_accel`, `max_decel` | 2.0, 1.5 m/s² | limite de aceleracion y frenada, tambien en el perfil |
 | `throttle_offset`, `throttle_per_mps` | 0.0, 0.2 | prealimentacion: 5 m/s por unidad de mando, medido |
-| `speed_kp` | 0.1 | correccion proporcional |
+| `speed_kp` | 0.05 | correccion proporcional (con retardo, mas ganancia se pasa de velocidad) |
 | `throttle_min`, `throttle_max` | 0.0, 1.0 | saturacion del acelerador |
 | `speed_source` | `tf` | `tf` o `encoders` |
 | `wheel_radius` | 0.058 m | solo para `encoders` |
@@ -453,6 +534,29 @@ lineal y simetrico, sin zona muerta, y 1.0 da 0.524 rad. Positivo gira a
 la izquierda, como en ROS (comprobado con el registro: mando positivo,
 guinada creciente).
 
+### Retardo
+
+`tools/measure_delay.py` aplica escalones alternos de direccion y mide
+cuanto tarda la realimentacion `steering` del puente (y, en marcha, la
+guinada del IMU) en responder. Con el modelo de retardo puro `T` mas servo
+de primer orden `tau`, el tiempo al 10 % del escalon es `T`
+(`command_delay`) y el tiempo al 90 % es `T + 2.3 tau`, de donde
+`steering_lag = (t90 - t10) / 2.2`. En marcha usa escalones pequenos y
+cortos y se corta si el LiDAR ve pared. La otra forma, sin prueba aparte:
+`tools/estimate_delay.py /tmp/rpp.csv` correlaciona en cualquier registro
+`log_csv` el mando de direccion con la realimentacion del puente y con la
+guinada del IMU (el registro guarda las dos desde esta version) y da los
+dos tiempos.
+
+Medido en la maquina de las vueltas de [Resultado](#resultado): parado,
+la realimentacion del servo responde entre 0.19 y 0.40 s despues del
+mando (mediana 0.32 s) y salta al valor final en una sola muestra del
+puente (7.5 Hz), asi que el servo es mas rapido que el muestreo. En marcha,
+por correlacion sobre 92 s de registro: 0.26 s hasta el servo y 0.30 s
+hasta la guinada (correlacion 1.00 y 0.82). De ahi `command_delay = 0.3`
+y `steering_lag = 0.05`. La realimentacion viene en radianes (0.262 con
+mando 0.5), lo que confirma los 0.524 rad del mando 1.0.
+
 ### Acelerador
 
 `tools/measure_speed.py` aplica escalones de mando en la recta de salida y
@@ -479,23 +583,47 @@ velocidad medida oscila entre 1.15 y 1.25.
 | 2 | 1.0 m/s | 1.0 s, [1.0, 2.0] | pose por IPS + IMU | vuelta de 30.5 s; muro en la vuelta 3 al entrar en la curva cerrada con 29 cm de error arrastrado |
 | 3 | 1.2 m/s | 1.0 s, [0.8, 2.0] | + curvatura anticipada 1.5 m, radio 1.5 m, proximidad 1.0 m | 4 vueltas de 26 s; zigzag en la recta en la vuelta 5 |
 | 4 | 1.2 m/s | 1.5 s, [1.0, 2.5] | igual | vueltas de 25.3 s, sin tocar el muro |
+| 5 | 1.2 m/s | 1.5 s, [0.8, 2.5] | radio 2.0 m, curvatura anticipada 2.0 m | 10 vueltas limpias de 30.4 a 32.4 s, 72 % del tiempo regulada por curvatura |
+| 6 | 2.7 m/s | 1.5 s, [0.8, 2.5] | radio 2.5 m, acel. 2.0 / 2.2 | vueltas de 17 s, roces laterales en curva y frenadas en tramos casi rectos |
+| 7 | 2.7 m/s | 1.2 s, [0.8, 1.5] | perfil de velocidad, retardo compensado 0.3 s, frenada 1.5 | 28.2, 15.2 y 19.5 s; en la ese de los indices 130-170 se abre 0.3 m en la curva de 2 m de radio y toca el muro interior de la siguiente |
+| 8 | 2.7 m/s | 0.5 s, [0.8, 1.0] | + tope lateral 1.8 m/s² | 10 vueltas limpias de 14.3 a 14.8 s, error 7 cm rms, pero zigzag del mando en la recta (periodo 0.6 s) |
+| 9 | 2.7 m/s | 0.55 s, [0.8, 1.5] | igual | **10 vueltas limpias de 13.7 a 14.1 s** ([Resultado](#resultado)); sin zigzag, error 12 cm rms |
 
-Dos lecciones. La primera, el retardo del mando fija el lookahead minimo:
-por debajo de `L_d / v = 1.5 s` el coche zigzaguea. La segunda, la
-regulacion por curvatura del arco actual llega tarde: el arco al lookahead
-solo se cierra cuando el coche ya esta en la curva. Mirar la curvatura del
-CSV 1.5 m por delante frena antes de entrar, y con eso la curva de 1 m de
-radio se toma a 0.5 m/s y con 0.47 m de holgura.
+Tres lecciones. La primera, el retardo del mando fija el lookahead minimo:
+por debajo de `L_d / v = 1.5 s` el coche zigzaguea, salvo que se compense
+el retardo. La segunda, la regulacion por curvatura del arco actual llega
+tarde: el arco al lookahead solo se cierra cuando el coche ya esta en la
+curva; hay que mirar el CSV por delante. La tercera, mirar una distancia
+fija por delante (pasadas 3 a 6) frena de mas: tomaba el maximo de `kappa`
+a 2 m y rodaba a velocidad de curva en tramos de 5 a 40 m de radio; con
+el tiempo teorico de esa regla en 16 s, la pasada 6 (17 s) ya estaba en
+su limite. De ahi el perfil con distancia de frenada y la compensacion
+del retardo, que ademas permite el lookahead corto que evita los roces
+laterales por recorte de curva. La pasada 7 anadio la cuarta: con
+`L_d = 1.5 m` en una ese de radios 2 m el objetivo cae ya en la curva
+siguiente, el mando se relaja antes de salir de la actual y el coche se
+abre; con `L_d <= 1.0 m` y el retardo compensado el error se queda en
+7 cm rms. En esa misma pasada se midio el subviraje (guinada real un 10 a
+20 % por debajo de la cinematica por encima de 2 m/s² laterales), origen
+del tope `max_lateral_accel`. La pasada 8 mostro la otra cara: 1.0 m en
+recta a 2.7 m/s zigzaguea. El escalado con la velocidad (pasada 9) da
+1.5 m en recta y 1.0 m en curva y resuelve las dos cosas a la vez.
 
 ### Como sintonizar
 
 1. Poner `log_csv` en `config/params.yaml` a una ruta; cada ciclo escribe
-   pose, indice, lookahead, curvatura, mandos, velocidades y distancia libre.
+   pose medida y predicha, indice, lookahead, curvatura, mandos, realimentacion
+   del servo, guinada, velocidades y distancia libre.
 2. Lanzar, dejar varias vueltas, y mirar el error lateral respecto a
    `config/trajectory.csv` y la distancia libre minima.
-3. Subir `max_speed` de 0.2 en 0.2 m/s; si zigzaguea en recta, subir
-   `lookahead_time`; si se abre en las curvas, subir `regulated_min_radius`
-   o `curvature_lookahead`.
+3. Medir el retardo con `tools/measure_delay.py` y poner `command_delay`
+   y `steering_lag`. Un error de 0.2 s en cualquier sentido ya se nota;
+   si el retardo medido pasa de 0.8 s, empezar con `max_speed` 2.0.
+4. Subir `max_speed` de 0.2 en 0.2 m/s comprobando 10 vueltas cada vez;
+   si zigzaguea en recta, subir `lookahead_time` o revisar
+   `command_delay`; si se abre en las curvas, subir `regulated_min_radius`
+   o bajar `max_decel`; si roza el muro interior en curva, bajar
+   `lookahead_max`.
 
 ## Herramientas
 
@@ -503,6 +631,14 @@ radio se toma a 0.5 m/s y con 0.47 m de holgura.
   direccion a cero, corta cuando el LiDAR ve pared cerca y graba la
   frenada. Imprime cadencia del puente, velocidad estacionaria, radio de
   rueda implicito y deceleracion, y guarda un CSV.
+- `tools/measure_delay.py`: escalones alternos de direccion, parado o en
+  marcha (`--throttle`), y tiempo al 10, 50 y 90 % de la realimentacion
+  del servo y a la reaccion de la guinada. Da `command_delay`.
+- `tools/closed_loop_sim.py`: simulacion cerrada sin AutoDRIVE del nodo
+  real (`RppNode`) sobre una bicicleta cinematica con retardo puro, servo
+  y acelerador medidos. Da vueltas, error lateral y velocidad maxima para
+  un archivo de parametros y un retardo simulado; es lo que se uso para
+  fijar la compensacion del retardo. Necesita ROS 2 sourceado.
 - `tools/replay_pose.py`: publica `/tf` recorriendo el CSV a velocidad
   constante. Sirve para probar `lap_node` y `rpp_node` sin simulador.
 - Pruebas unitarias de la geometria y del contador:
