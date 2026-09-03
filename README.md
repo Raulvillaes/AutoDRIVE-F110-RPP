@@ -38,6 +38,8 @@ de 1 m de radio (La primera vuelta se cuenta desde el frenado completado):
 |    ---     |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |
 | Tiempo (s) | 14.14 | 13.83 | 13.78 | 13.76 | 13.70 | 13.70 | 13.69 | 13.73 | 13.79 | 13.71 |
 
+![GIF](images/breve.gif)
+
 Vuelta de 27.85 m, velocidad media 1.96 m/s. Error lateral respecto a la
 trayectoria de 12 cm (rms) y 26 cm maximo; holgura minima al muro vista
 por el LiDAR de 1.02 m, y la regulacion por proximidad no llegó a actuar.
@@ -118,19 +120,19 @@ Al completar `total_laps` (defindas en `config/params.yaml`), si es un
 valor mayor a 0 (10 por defecto), `lap_node` imprime el resumen y el
 launch apaga todo; el controlador deja el acelerador a cero antes de salir.
 
+**Rendimiento de la máquina.** El lazo de control corre a la cadencia del
+simulador (unos 5 Hz). Si el simulador pierde cuadros porque la máquina
+está cargada o tiene insuficientes recursos, el puente publica más lento,
+la latencia crece y el coche subvira en las curvas cerradas.
+Es convniente no tener nada más abierto y usar el puente *headless* si
+RViz no hace falta, o en máquinas de bajos recursos.
+
 ### Argumentos del launch
 
 ```bash
 ros2 launch rpp_f110 rpp.launch.py params_file:=/ruta/a/otro.yaml   # otros parametros
 ros2 launch rpp_f110 rpp.launch.py log_csv:=/tmp/rpp.csv             # registro por ciclo
 ```
-
-**Carga de la maquina.** El lazo de control corre a la cadencia del
-simulador (unos 5 Hz). Si el simulador pierde cuadros porque la máquina
-está cargada o tiene insuficientes recursos, el puente publica más lento,
-el retardo entre mando y efecto crece y el coche subvira en las curvas
-cerradas. Es convniente no tener nada más abierto y usar el puente
-*headless* si RViz no hace falta o en máquinas de bajos recursos.
 
 ## Trayectoria de entrada
 
@@ -144,9 +146,8 @@ El controlador se alimenta de un CSV con la vuelta completa en el marco
 | `s`     | m      | longitud de arco acumulada desde el primer punto |
 | `kappa` | 1/m    | curvatura con signo, positiva a izquierdas       |
 
-La lista es **cíclica**: el ultimo punto no repite al primero, empalma con
-el. El controlador la recorre en círculo y el seguimiento no se interrumpe
-al cerrar la vuelta.
+La lista es **cíclica**: el ultimo punto empalma con el primero sin que se
+repita ninguno.
 
 **Ya hay un archivo listo:** `config/trajectory.csv` es una copia de la
 salida de la Parte 1 (279 puntos a 0.10 m, vuelta de 27.85 m, radio de
