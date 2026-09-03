@@ -17,6 +17,7 @@ Segunda parte del proyecto final de Vehiculos no Tripulados. La primera parte
 - [Prerrequisitos](#prerrequisitos)
 - [Instalación](#instalación)
 - [Ejecución](#ejecución)
+  - [Argumentos del launch](#argumentos-del-launch)
 - [Trayectoria de entrada](#trayectoria-de-entrada)
 - [Marcos de coordenadas: por que no hace falta localizacion](#marcos-de-coordenadas-por-que-no-hace-falta-localizacion)
 - [El controlador](#el-controlador)
@@ -83,7 +84,7 @@ ha seguido el tutorial del curso, puede abrirse con:
 ~/Downloads/AutoDRIVE_Sim/AutoDRIVE\ Simulator.x86_64
 ```
 
-**2. Puente** (terminal 1):
+**2. Bridge** (terminal 1):
 
 ```bash
 cd ~/autodrive_ws
@@ -94,9 +95,11 @@ export PYTHONUNBUFFERED=1
 ros2 launch autodrive_f1tenth simulator_bringup_headless.launch.py
 ```
 
-Con `simulator_bringup_rviz.launch.py` se abre ademas RViz.
+Con `simulator_bringup_rviz.launch.py` se abre además RViz.
 
-**3. Controlador** (terminal 2):
+**3. Cambiar a Connected y Autonomous** dentro del simulador AutoDRIVE
+
+**4. Controlador** (terminal 2):
 
 ```bash
 cd ~/autodrive_ws
@@ -107,7 +110,7 @@ ros2 launch rpp_f110 rpp.launch.py
 ```
 
 Arrancan tres nodos: `rpp_node` (control), `lap_node` (vueltas y
-cronometro, imprime en esta terminal) y `path_node` (visualizacion). Para
+cronómetro, imprime en esta terminal) y `path_node` (visualización). Para
 verlo en RViz se añaden `/rpp/path` (Path), `/rpp/lookahead` (Marker) y
 `/rpp/finish_line` (Marker) con el marco fijo en `map`.
 
@@ -115,7 +118,7 @@ Al completar `total_laps` (defindas en `config/params.yaml`), si es un
 valor mayor a 0 (10 por defecto), `lap_node` imprime el resumen y el
 launch apaga todo; el controlador deja el acelerador a cero antes de salir.
 
-Argumentos del launch:
+### Argumentos del launch
 
 ```bash
 ros2 launch rpp_f110 rpp.launch.py params_file:=/ruta/a/otro.yaml   # otros parametros
