@@ -1,10 +1,12 @@
 __pycache__/
 *.py[cod]
+*.egg-info/
 build/
 install/
 log/
 venv/
 .vscode/
+.pytest_cache/
 
 # notas de trabajo, no forman parte de la entrega
 CONTEXTO.md

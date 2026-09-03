@@ -1,0 +1,70 @@
+# Parametros de los tres nodos. Se cargan con:
+#   ros2 launch rpp_f110 rpp.launch.py
+# Tras editar este archivo hay que volver a compilar (colcon build) para que
+# la copia del share se actualice, salvo que se haya compilado con
+# --symlink-install.
+
+rpp_node:
+  ros__parameters:
+    # Trayectoria. Vacio = config/trajectory.csv incluido en el paquete
+    # (copia de la salida de AutoDRIVE-F110-Global-Planner).
+    trajectory_csv: ""
+
+    # ---- Vehiculo (medido contra el simulador) ----
+    wheelbase: 0.33              # m, batalla
+    max_steering_angle: 0.524    # rad que da el mando de direccion 1.0
+
+    # ---- Pure Pursuit: lookahead adaptativo ----
+    lookahead_time: 1.5          # s, L_d = lookahead_time * velocidad medida
+    lookahead_min: 0.8           # m
+    lookahead_max: 2.5           # m
+
+    # ---- Velocidad y sus tres regulaciones ----
+    max_speed: 1.2               # m/s, velocidad de crucero en recta
+    min_speed: 0.4               # m/s, suelo de la regulacion por curvatura
+    regulated_min_radius: 2.0    # m, por debajo de este radio se frena
+    curvature_lookahead: 2.0     # m de camino por delante cuya curvatura tambien regula
+    proximity_distance: 1.0      # m, distancia frontal a la que empieza a frenar
+    proximity_gain: 1.0          # ganancia de la regulacion por proximidad
+    proximity_fov: 30.0          # grados, abertura total del sector frontal del LiDAR
+    max_accel: 1.0               # m/s^2
+    max_decel: 2.0               # m/s^2
+
+    # ---- Velocidad -> mando de acelerador [0, 1] ----
+    # mando = throttle_offset + throttle_per_mps * v_obj + speed_kp * (v_obj - v_medida)
+    # PROVISIONALES hasta medir con tools/measure_speed.py
+    throttle_offset: 0.0
+    throttle_per_mps: 0.2
+    speed_kp: 0.10
+    throttle_min: 0.0            # 0.0 = frenar solo por inercia; negativo = freno motor
+    throttle_max: 1.0
+
+    # ---- Medicion de velocidad ----
+    speed_source: "tf"           # "tf" (desplazamiento de la pose) o "encoders"
+    wheel_radius: 0.058          # m, solo para "encoders"
+    speed_filter: 0.5            # 0..1, peso de la muestra nueva (1 = sin filtro)
+
+    # ---- Fuente de la pose, seguridad y registro ----
+    pose_source: "sensors"       # "sensors" (IPS + IMU) o "tf" (map -> f1tenth_1)
+    pose_timeout: 1.0            # s sin pose -> acelerador a cero
+    log_csv: ""                  # ruta de un CSV para registrar cada ciclo (vacio = no)
+
+lap_node:
+  ros__parameters:
+    # Linea de meta de muro a muro, [x1, y1, x2, y2] en el marco map. Es la
+    # misma que la Parte 1 usa como muro virtual para forzar la vuelta entera.
+    finish_line: [1.47, 3.16, 0.29, 3.16]
+    # Sentido de la carrera al cruzar la meta (vector unitario en map).
+    finish_direction: [0.0, -1.0]
+    min_lap_time: 5.0            # s, un cruce antes de esto se ignora
+    rearm_distance: 1.0          # m, hay que alejarse esto de la meta para rearmar
+    total_laps: 10               # >0: al completar esas vueltas resume y termina
+    progress_period: 0.0         # s, >0 imprime la vuelta en curso cada tanto
+    pose_source: "sensors"       # igual que en rpp_node
+
+path_node:
+  ros__parameters:
+    trajectory_csv: ""
+    finish_line: [1.47, 3.16, 0.29, 3.16]
+    frame_id: "map"
+    period: 1.0                  # s entre publicaciones (RViz puede llegar tarde)
