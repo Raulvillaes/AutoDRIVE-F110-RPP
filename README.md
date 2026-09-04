@@ -17,15 +17,13 @@ Segunda parte del proyecto final de Vehiculos no Tripulados. La primera parte
 - [Prerrequisitos](#prerrequisitos)
 - [Instalación](#instalación)
 - [Ejecución](#ejecución)
-  - [Argumentos del launch](#argumentos-del-launch)
 - [Trayectoria de entrada](#trayectoria-de-entrada)
-- [Marcos de coordenadas: por que no hace falta localizacion](#marcos-de-coordenadas-por-que-no-hace-falta-localizacion)
 - [El controlador](#el-controlador)
 - [Contador de vueltas y cronometro](#contador-de-vueltas-y-cronometro)
 - [Estructura del codigo](#estructura-del-codigo)
 - [Interfaz ROS 2](#interfaz-ros-2)
 - [Parametros](#parametros)
-- [Sintonizacion](#sintonizacion)
+- [Sintonización](#sintonización)
 - [Herramientas](#herramientas)
 
 ## Resultado
@@ -120,19 +118,21 @@ Al completar `total_laps` (defindas en `config/params.yaml`), si es un
 valor mayor a 0 (10 por defecto), `lap_node` imprime el resumen y el
 launch apaga todo; el controlador deja el acelerador a cero antes de salir.
 
-**Rendimiento de la máquina.** El lazo de control corre a la cadencia del
-simulador (unos 5 Hz). Si el simulador pierde cuadros porque la máquina
-está cargada o tiene insuficientes recursos, el puente publica más lento,
-la latencia crece y el coche subvira en las curvas cerradas.
-Es convniente no tener nada más abierto y usar el puente *headless* si
-RViz no hace falta, o en máquinas de bajos recursos.
-
 ### Argumentos del launch
 
 ```bash
 ros2 launch rpp_f110 rpp.launch.py params_file:=/ruta/a/otro.yaml   # otros parametros
 ros2 launch rpp_f110 rpp.launch.py log_csv:=/tmp/rpp.csv             # registro por ciclo
 ```
+
+### Rendimiento deL controlador
+
+El lazo de control corre a la cadencia del simulador (unos 5 Hz).
+Si el simulador pierde cuadros porque la máquina está cargada o
+tiene insuficientes recursos, el puente publica más lento,la
+latencia crece y el coche subvira en las curvas cerradas.
+Es convniente no tener nada más abierto y usar el puente *headless*
+si RViz no hace falta, o en máquinas de bajos recursos.
 
 ## Trayectoria de entrada
 
@@ -166,32 +166,35 @@ cd f1tenth && python f1tenth_map.py --no-anim
 y se apunta a ella con el parametro `trajectory_csv` de `rpp_node` y
 `path_node` (vacio = la copia del paquete).
 
-## Marcos de coordenadas: por que no hace falta localizacion
+### Marcos de coordenadas: por que no hace falta localizacion
 
-El puente de AutoDRIVE publica la pose verdadera del coche (el centro
-del eje trasero) desde la transformación `map -> f1tenth_1` a partir
-del IPS y la IMU del simulador. Ese `map` es el mismo sistema de
-coordenadas del mapa generado con SLAM Toolbox sobre el que se planificó
-la trayectoria en la Parte 1 y cae centrada en el carril (se comprobó
-con `tools/check_frame.py pose` en aquel repositorio).
+En la transformación `map -> f1tenth_1`, el puente de AutoDRIVE publica la
+pose verdadera del coche (el centro del eje trasero) a partir del IPS y la
+IMU del simulador. Ese `map` es el mismo sistema de coordenadas del mapa
+generado con SLAM Toolbox sobre el que se planificó la trayectoria en la
+Parte 1: se comprobó proyectando la pose sobre el PGM del mapa
+(`tools/check_frame.py pose` en aquel repositorio) y cae centrada en el
+carril.
 
-Por eso **los waypoints se consumen tal cual**. No hace falta AMCL,
-ni filtro de particulas, ni cambio de marco.
+Por eso **los waypoints se consumen tal cual**, sin reescalar ni transformar
+nada, y no hace falta AMCL, ni filtro de partículas, ni cambio de marco.
+
+#### De donde se lee la pose
 
 Los nodos leen la pose de dos topics del bridge, `/autodrive/f1tenth_1/ips`
 (posición) y `/autodrive/f1tenth_1/imu` (orientación), y no del TF. Son los
-mismos números pero la entrega del TF se degrada con el tiempo: recién
-lanzado el puente la latencia es de 1 ms, pero con el tiempo se degrada
-hasta perder la mitad de las poses. Los topics de IPS e IMU salen de
-publishers fijos y llegan siempre a la cadencia del simulador, unos 4 a 5 Hz.
-El parámetro `pose_source` permite volver a `tf`.
+mismos números, pero la entrega del TF se degrada con el tiempo: recién
+lanzado el puente la latencia es de 1 ms, mientras que tras media hora se
+pierde la mitad de las poses. Los topics de IPS e IMU salen de publishers
+fijos y llegan siempre a la cadencia del simulador, unos 4 a 5 Hz. El
+parámetro `pose_source` permite volver a `tf`.
 
 ## El controlador
 
 ### Pure Pursuit
 
-En cada ciclo se busca el punto de la trayectoria mas cercano al coche y,
-avanzando desde el, el primer punto a distancia `L_d` (el *lookahead*),
+En cada ciclo se busca el punto de la trayectoria más cercano al coche y,
+avanzando desde él, el primer punto a distancia `L_d` (el *lookahead*),
 interpolado dentro de su segmento para que quede exactamente sobre la
 circunferencia de radio `L_d`. Ese punto se expresa en el marco del
 vehiculo; su coordenada lateral `y_L` fija la curvatura del arco que pasa
@@ -201,25 +204,24 @@ por el eje trasero, tangente al rumbo actual, y llega al punto:
 gamma = 2 * y_L / L_d^2
 ```
 
-Con el modelo de bicicleta cinematica (el marco del vehiculo esta en el eje
-trasero, que es donde vale la formula) el angulo de las ruedas es
+Con el modelo de bicicleta cinemática (el marco del vehículo está en el eje
+trasero, que es donde vale la formula) el ángulo de las ruedas es
 
 ```
-delta = atan(L * gamma)          L = 0.33 m (batalla)
+gamma = atan(L * kappa)          L = 0.33 m (distancia entre ejes)
 ```
 
-y el simulador recibe un mando normalizado. Se midio contra el simulador
-que la relacion es lineal y simetrica: mando 1.0 da 0.524 rad (30°), asi que
+y el simulador recibe un mando normalizado. Se midió contra el simulador
+que la relación es lineal y simétrica: mando 1.0 da 0.524 rad (30°), asi que
 
 ```
 steering_command = delta / 0.524      saturado a [-1, 1]
 ```
 
-La busqueda del punto mas cercano usa una ventana ciclica alrededor del
-indice del ciclo anterior: el coche no puede haberse ido lejos en un ciclo
-y asi no se confunde con otro tramo de pista que pase cerca (el circuito
-tiene tramos paralelos separados por un muro). Si aun asi el mejor punto
-queda a mas de 1 m, repite la busqueda sobre toda la vuelta.
+La búsqueda del punto más cercano usa una ventana cíclica alrededor del
+índice del ciclo anterior: el coche no puede haberse ido lejos en un ciclo
+y así no se confunde con otro tramo de pista cercano (como uno paralelo).
+Si el mejor punto queda a más de 1 m, repite la búsqueda sobre toda la vuelta.
 
 ### Lookahead adaptativo
 
@@ -227,35 +229,27 @@ queda a mas de 1 m, repite la busqueda sobre toda la vuelta.
 L_d = clamp(lookahead_time * v_prevista, lookahead_min, lookahead_max)
 ```
 
-Un lookahead corto sigue la trayectoria con precision pero oscila a
+Un lookahead corto sigue la trayectoria con precisión pero oscila a
 velocidad alta; uno largo es estable pero recorta las curvas. Escalarlo con
-la velocidad da lo mejor de cada caso, y los limites evitan que a velocidad
-cero apunte al punto mas cercano (inestable) o que en recta apunte
+la velocidad da lo mejor de cada caso, y los límites evitan que a velocidad
+cero apunte al punto más cercano (inestable) o que en recta apunte
 demasiado lejos.
 
-La velocidad que escala `L_d` no es la medida ahora sino la que tendra el
+La velocidad que escala `L_d` no es la medida ahora sino la que tendrá el
 coche cuando actue el mando, por coherencia con la
-[compensacion del retardo](#compensacion-del-retardo): el Pure Pursuit se
+[compensación del retardo](#compensación-del-retardo): el Pure Pursuit se
 aplica sobre la pose predicha `command_delay` segundos por delante, y en
 ese intervalo el coche esta frenando para entrar en curva o acelerando al
-salir. Con los parametros actuales la diferencia llega a
-`max_decel * command_delay = 0.45 m/s`, un 17 % de `lookahead_max`, y va
-siempre en el sentido malo: al entrar en curva el `L_d` se queda largo
-justo donde recortar cuesta caro. Se estima llevando la velocidad medida
-hacia la objetivo del ciclo previo dentro de los limites de aceleracion.
-En la simulacion cerrada no empeora ningun escenario y gana cuanto peor es
-el caso (a 5 Hz, error lateral de 7.1 a 5.9 cm rms y de 4.7 a 4.0 cm en
-curva; con 0.45 s de retardo, vuelta de 18.5 a 17.9 s y traqueteo del
-mando un 17 % menor).
+salir.
 
 Cuanto recorta se puede estimar: el arco del Pure Pursuit se separa de la
 cuerda hasta `L_d^2 / (8 r)`. En la curva de 1 m de radio, `L_d = 0.8 m`
 desvia 8 cm, `L_d = 1.65 m` desvia 34 cm y `L_d = 2.5 m` desvia 78 cm, con
 0.6 m de semiancho de pista. Por eso el lookahead en curva tiene que ser
 corto, y lo que permite acortarlo sin oscilar es la
-[compensacion del retardo](#compensacion-del-retardo).
+[compensación del retardo](#compensación-del-retardo).
 
-### Compensacion del retardo
+### Compensación del retardo
 
 Entre publicar un mando y ver su efecto en la pose pasan `command_delay`
 segundos (0.5 a 1 s en el puente de AutoDRIVE, ver
@@ -270,20 +264,19 @@ y    += v sin(yaw) dt
 yaw  += v tan(delta_i) / L * dt        para cada mando pendiente delta_i
 ```
 
-y el punto mas cercano, el lookahead y la curvatura se calculan desde esa
-pose predicha, que es donde estara el coche cuando el mando de este ciclo
+y el punto más cercano, el lookahead y la curvatura se calculan desde esa
+pose predicha, que es donde estará el coche cuando el mando de este ciclo
 llegue a las ruedas (`prediction.py`). El servo de direccion tampoco es
-instantaneo: en la integracion el angulo real de las ruedas persigue al
+instantáneo: en la integración el ángulo real de las ruedas persigue al
 mandado como un sistema de primer orden con constante `steering_lag`.
-Con `command_delay = 0` se desactiva y el controlador es el RPP sin mas.
-Los dos tiempos se miden con `tools/measure_delay.py` en cada maquina.
+Con `command_delay = 0` se desactiva y el controlador es el RPP sin más.
 
-La simulacion cerrada de `tools/closed_loop_sim.py` (bicicleta cinematica,
+La simulación cerrada de `tools/closed_loop_sim.py` (bicicleta cinemática,
 retardo puro, servo de primer orden y el acelerador medido, a 4.5 Hz) da
-la medida de lo que aporta cada pieza con los parametros actuales y un
+la medida de lo que aporta cada pieza con los parámetros actuales y un
 retardo real de 0.5 s mas un servo de 0.15 s:
 
-| Compensacion | Vueltas | Error lateral rms / max |
+| Compensación | Vueltas | Error lateral rms / max |
 |---|---|---|
 | ninguna (`command_delay = 0`) | no completa una vuelta | 0.70 / 1.64 m |
 | retardo puro (`steering_lag = 0`) | 13.5 s | 0.19 / 0.44 m |
@@ -292,22 +285,22 @@ retardo real de 0.5 s mas un servo de 0.15 s:
 
 Y lo sensible que es al valor: con el retardo real 0.2 s por encima o por
 debajo del configurado el error rms sube a 0.3 m, y con retardos reales de
-0.8 s o mas ni bien compensado baja de 0.3 m a 2.7 m/s. El retardo es el
-parametro que mas importa y hay que medirlo en la maquina donde se corre.
+0.8 s o más ni bien compensado baja de 0.3 m a 2.7 m/s. El retardo es el
+parámetro que más importa y hay que medirlo en la máquina donde se corre.
 
 ### Las tres regulaciones
 
-Lo que distingue al RPP del Pure Pursuit clasico es que la velocidad
+Lo que distingue al RPP del Pure Pursuit clásico es que la velocidad
 objetivo no es fija: parte de `max_speed` y pasa por tres regulaciones.
 
 1. **Curvatura.** Si el radio `r` baja de `regulated_min_radius`, la
    velocidad escala linealmente con el radio: `v = max_speed * r / r_min`.
-   Se aplica por dos vias y manda la menor:
+   Se aplica por dos vías y manda la menor:
    - al arco actual del Pure Pursuit, `r = 1 / |gamma|`: lo que el coche
-     esta girando ahora, incluida la correccion del error lateral;
+     está girando ahora, incluída la corrección del error lateral;
    - al camino que viene, como un **perfil de velocidad** calculado una
      vez sobre el CSV (`trajectory.speed_profile`): velocidad de curva de
-     cada punto por su `kappa`, una pasada hacia atras que limita cada
+     cada punto por su `kappa`, una pasada hacia atrás que limita cada
      punto a lo que permite frenar con `max_decel` hasta el siguiente
      (`v_i <= sqrt(v_{i+1}^2 + 2 a ds)`) y una hacia delante con
      `max_accel`. El coche frena justo lo necesario antes de cada curva, en
@@ -320,19 +313,19 @@ objetivo no es fija: parte de `max_speed` y pasa por tres regulaciones.
      guinada real queda un 10 a 20 % por debajo de la cinematica (el coche
      subvira y se abre). Por eso hay un tope `v <= sqrt(max_lateral_accel * r)`
      en las dos vias. Con los parametros actuales el perfil da una vuelta
-     ideal de 13.7 s frente a los 16 s de la regla anterior (maximo de
+     ideal de 13.7 s frente a los 16 s de la regla anterior (máximo de
      `kappa` a 2 m por delante).
 2. **Proximidad.** El LiDAR mira un sector frontal de `proximity_fov`
-   grados. Si la distancia libre minima `d` baja de `proximity_distance`,
+   grados. Si la distancia libre mínima `d` baja de `proximity_distance`,
    `v = v * proximity_gain * d / proximity_distance`. En el circuito sin
-   obstaculos es una red de seguridad: dentro de una curva el sector
+   obstáculos es una red de seguridad: dentro de una curva el sector
    frontal apunta al muro exterior, asi que el sector es estrecho (20°) y
    la distancia corta (1 m) para que no frene una curva bien tomada.
-3. **Aceleracion.** La velocidad objetivo no puede cambiar mas de
+3. **Aceleración.** La velocidad objetivo no puede cambiar mas de
    `max_accel * dt` al subir ni de `max_decel * dt` al bajar entre ciclos.
    Suaviza los escalones que dejan las dos anteriores.
 
-Despues de las dos primeras se aplica un suelo `min_speed`, para que ninguna
+Después de las dos primeras se aplica un suelo `min_speed`, para que ninguna
 regulacion deje el coche parado en mitad de la pista.
 
 ### De velocidad a mando de acelerador
@@ -340,7 +333,7 @@ regulacion deje el coche parado en mitad de la pista.
 El simulador no acepta una velocidad: acepta un mando de acelerador
 normalizado en [-1, 1], y tampoco publica la velocidad del coche. Se midio
 la velocidad estacionaria que da cada mando (ver
-[Sintonizacion](#sintonizacion)) y se invierte esa curva como
+[Sintonización](#sintonización)) y se invierte esa curva como
 prealimentacion, con una correccion proporcional sobre la velocidad medida:
 
 ```
@@ -425,7 +418,7 @@ rpp_f110/
   lap_counter.py    logica del cruce orientado y del cronometro (sin ROS, con pruebas)
   path_node.py      trayectoria como nav_msgs/Path y meta como Marker para RViz
   trajectory.py     carga del CSV, geometria ciclica (punto mas cercano, lookahead) y perfil de velocidad
-  prediction.py     pose predicha con los mandos pendientes (compensacion del retardo, sin ROS)
+  prediction.py     pose predicha con los mandos pendientes (compensación del retardo, sin ROS)
   vehicle_pose.py   pose del vehiculo desde /tf (map -> f1tenth_1) y guinada del cuaternion
 config/
   params.yaml       parametros de los tres nodos
@@ -524,7 +517,7 @@ Todos en `config/params.yaml`. Los valores son los de las vueltas de
 | `progress_period` | 0.0 s | >0: imprime la vuelta en curso cada tanto |
 | `pose_source` | `sensors` | igual que en `rpp_node` |
 
-## Sintonizacion
+## Sintonización
 
 Todo lo que sigue se midio contra el simulador; nada sale de una hoja de
 datos.
@@ -599,7 +592,7 @@ curva; hay que mirar el CSV por delante. La tercera, mirar una distancia
 fija por delante (pasadas 3 a 6) frena de mas: tomaba el maximo de `kappa`
 a 2 m y rodaba a velocidad de curva en tramos de 5 a 40 m de radio; con
 el tiempo teorico de esa regla en 16 s, la pasada 6 (17 s) ya estaba en
-su limite. De ahi el perfil con distancia de frenada y la compensacion
+su limite. De ahi el perfil con distancia de frenada y la compensación
 del retardo, que ademas permite el lookahead corto que evita los roces
 laterales por recorte de curva. La pasada 7 anadio la cuarta: con
 `L_d = 1.5 m` en una ese de radios 2 m el objetivo cae ya en la curva
@@ -640,7 +633,7 @@ recta a 2.7 m/s zigzaguea. El escalado con la velocidad (pasada 9) da
   real (`RppNode`) sobre una bicicleta cinematica con retardo puro, servo
   y acelerador medidos. Da vueltas, error lateral y velocidad maxima para
   un archivo de parametros y un retardo simulado; es lo que se uso para
-  fijar la compensacion del retardo. Necesita ROS 2 sourceado.
+  fijar la compensación del retardo. Necesita ROS 2 sourceado.
 - `tools/replay_pose.py`: publica `/tf` recorriendo el CSV a velocidad
   constante. Sirve para probar `lap_node` y `rpp_node` sin simulador.
 - Pruebas unitarias de la geometria y del contador:
